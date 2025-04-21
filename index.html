@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Driver Delivery Progress</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <style>
+    body {
+      background-color: #f8f9fa;
+      font-size: 1rem;
+    }
+
+    canvas {
+      max-height: 700px;
+      width: 100% !important;
+    }
+
+    .card {
+      border-radius: 1rem;
+      box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.1);
+    }
+
+    .scroll-chart {
+      overflow-x: auto;
+    }
+
+    #downloadArea {
+      background-color: white;
+      padding: 30px;
+    }
+
+    @media (max-width: 768px) {
+      body {
+        font-size: 0.95rem;
+      }
+
+      h3 {
+        font-size: 1.3rem;
+      }
+
+      canvas {
+        max-height: 500px;
+      }
+    }
+  </style>
+</head>
+<body class="py-4">
+  <div class="container-fluid px-3">
+    <div class="card p-3 p-md-4">
+      <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+        <h3 class="mb-2 mb-md-0">📊 Driver Delivery Progress</h3>
+        <div>
+          <button class="btn btn-primary btn-sm me-2" onclick="copyToClipboard()">📋 Copy to Clipboard</button>
+          <button class="btn btn-success btn-sm" onclick="downloadChart()">⬇️ Download Chart (JPG)</button>
+        </div>
+      </div>
+
+      <div class="mb-3">
+        <label for="upload" class="form-label fw-semibold">Upload Excel File (.xlsx):</label>
+        <input type="file" id="upload" class="form-control" accept=".xlsx, .xls" />
+      </div>
+
+      <div class="mb-4">
+        <label for="hubSelect" class="form-label fw-semibold">Pilih Hub:</label>
+        <select id="hubSelect" class="form-select">
+          <option value="Lembor Hub">Lembor Hub</option>
+          <option value="MH 1 Lembor Hub">MH 1 Lembor Hub</option>
+   <option value="MH 2 Lembor Hub">MH 2 Lembor Hub</option>
+        </select>
+      </div>
+
+      <p id="status" class="text-muted fst-italic">
+        Please upload an Excel file with columns: <strong>Driver Name</strong>, <strong>Assigned</strong>, <strong>Delivered（#）</strong>
+      </p>
+
+      <div id="downloadArea">
+        <div class="scroll-chart mb-4">
+          <canvas id="driverChart"></canvas>
+        </div>
+        <div id="driverInfo" class="mt-4"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function extractIdAndFirstName(fullName) {
+      const pattern = /\[(\d+)\]\s+([A-Z]+)/g;
+      const matches = [...fullName.matchAll(pattern)];
+      return matches.map(m => `[${m[1]}] ${m[2]}`).join(' ');
+    }
+
+    function getFormattedDateTime(hubName) {
+      const now = new Date();
+      const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+      const day = days[now.getDay()];
+      const date = now.toLocaleDateString('id-ID');
+      const time = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+      return `Progress Delivery ${hubName} - ${day}, ${date} ${time}`;
+    }
+
+    function downloadChart() {
+      const area = document.getElementById('downloadArea');
+      html2canvas(area, { backgroundColor: '#fff', scale: 3 }).then(captured => {
+        const link = document.createElement('a');
+        link.download = 'driver_progress_chart.jpg';
+        link.href = captured.toDataURL('image/jpeg', 1.0);
+        link.click();
+      });
+    }
+
+    function copyToClipboard() {
+      const area = document.getElementById('downloadArea');
+      html2canvas(area, { backgroundColor: '#fff', scale: 3 }).then(canvas => {
+        canvas.toBlob(blob => {
+          const item = new ClipboardItem({ 'image/png': blob });
+          navigator.clipboard.write([item]).then(() => {
+            alert("✅ Gambar berhasil disalin ke clipboard!");
+          }).catch(err => {
+            alert("❌ Gagal menyalin gambar: " + err);
+          });
+        });
+      });
+    }
+
+    let currentHub = document.getElementById('hubSelect').value;
+
+    document.getElementById('hubSelect').addEventListener('change', () => {
+      currentHub = document.getElementById('hubSelect').value;
+      if (window.lastJson) renderChart(window.lastJson);
+    });
+
+    document.getElementById('upload').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      const status = document.getElementById("status");
+
+      if (!file) return;
+      status.textContent = "📥 Processing file...";
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(sheet);
+
+        window.lastJson = json;
+        renderChart(json);
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+   function renderChart(json) {
+  const names = [];
+  const progress = [];
+  const colors = [];
+  const driverDetails = [];
+
+  json.forEach(row => {
+    if (row["Driver Name"] && row["Assigned"] !== undefined && row["Delivered（#）"] !== undefined) {
+      const rawName = row["Driver Name"];
+      const name = extractIdAndFirstName(rawName);
+      const assigned = +row["Assigned"];
+      const delivered = +row["Delivered（#）"];
+      const percent = assigned === 0 ? 0 : +((delivered / assigned) * 100).toFixed(1);
+
+      // Pastikan data dengan 0% tetap dimasukkan
+      names.push(name);
+      progress.push(percent);
+
+      // Pilih warna sesuai dengan persentase progres
+      if (percent === 0) {
+        colors.push("rgba(255, 159, 64, 0.8)");  // Warna khusus untuk progres 0%
+      } else if (percent <= 25) {
+        colors.push("rgba(255, 99, 132, 0.8)");
+      } else if (percent <= 50) {
+        colors.push("rgba(255, 206, 86, 0.8)");
+      } else if (percent <= 75) {
+        colors.push("rgba(54, 162, 235, 0.8)");
+      } else {
+        colors.push("rgba(75, 192, 192, 0.8)");
+      }
+
+      driverDetails.push({ name, assigned, delivered, percent });
+    }
+  });
+
+  document.getElementById("status").textContent = `✅ Loaded ${names.length} drivers`;
+
+  const ctx = document.getElementById('driverChart').getContext('2d');
+  if (window.driverChart instanceof Chart) window.driverChart.destroy();
+
+  window.driverChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: names,
+      datasets: [{
+        label: 'Delivery Progress (%)',
+        data: progress,
+        backgroundColor: colors,
+        borderRadius: 8,
+        barThickness: 28
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        title: {
+          display: true,
+          text: getFormattedDateTime(currentHub),
+          font: {
+            size: 20,
+            weight: 'bold'
+          },
+          padding: { bottom: 20 }
+        },
+        legend: { display: false },
+        datalabels: {
+          color: '#000',
+          anchor: 'end',
+          align: 'right',
+          formatter: val => val + '%',
+          font: {
+            size: 14,
+            weight: 'bold'
+          }
+        }
+      },
+      scales: {
+        x: {
+          max: 100,
+          ticks: {
+            callback: val => val + '%',
+            font: { size: 14 }
+          },
+          title: {
+            display: true,
+            text: 'Progress (%)',
+            font: { weight: 'bold', size: 16 }
+          }
+        },
+        y: {
+          ticks: {
+            font: { size: 14, weight: 'bold' }
+          }
+        }
+      }
+    },
+    plugins: [ChartDataLabels]
+  });
+
+  const infoContainer = document.getElementById('driverInfo');
+  let infoHTML = '<h5 class="mt-4 mb-3">📋 Detail Progress per Driver</h5><ul class="list-group">';
+  driverDetails.forEach(d => {
+    infoHTML += `
+      <li class="list-group-item d-flex justify-content-between align-items-center">
+        <strong>${d.name}</strong>
+        <span>Assigned: ${d.assigned} | Delivered: ${d.delivered} | ${d.percent}%</span>
+      </li>`;
+  });
+  infoHTML += '</ul>';
+
+  const totalAssigned = driverDetails.reduce((sum, d) => sum + d.assigned, 0);
+  const totalDelivered = driverDetails.reduce((sum, d) => sum + d.delivered, 0);
+  const completionRate = totalAssigned === 0 ? 0 : ((totalDelivered / totalAssigned) * 100).toFixed(1);
+
+  infoHTML += `<p class="mt-4 fw-bold">Completion Rate = ${completionRate}%</p>`;
+  infoContainer.innerHTML = infoHTML;
+}
+
+  </script>
+</body>
+</html>
