@@ -251,7 +251,7 @@
     const totalAssigned = driverDetails.reduce((sum, d) => sum + d.assigned, 0);
     const totalDelivered = driverDetails.reduce((sum, d) => sum + d.delivered, 0);
     const completionRate = totalAssigned === 0 ? 0 : ((totalDelivered / totalAssigned) * 100).toFixed(1);
-    infoHTML += `<p class="mt-4 fw-bold">Completion Rate = ${completionRate}%</p>`;
+    infoHTML += ` `;
     infoContainer.innerHTML = infoHTML;
 
     window.lastDriverDetails = driverDetails;
